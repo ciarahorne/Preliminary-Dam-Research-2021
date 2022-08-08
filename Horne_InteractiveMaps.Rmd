@@ -1,0 +1,265 @@
+---
+title: "Interactive Maps"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+---
+
+The purpose of the following interactive maps is to show how severe storm events can contribute to the failure of several dams. It will be revealed that both New York and South Carolina experienced storms that caused several dams at a time to fail, most of which were over 50 years old. These examples further emphasize the need for more dam funding so that older dams can be rehabilitated to contemporary design standards that resist climate-induced storms. 
+
+```{r setup, include=FALSE}
+
+library(plyr)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(flexdashboard)
+library(mapview)
+library(readr)
+library(plotly)
+
+my.token <- read_lines("/Users/ciara/Documents/Research/Project 2021/R Scripts/Horne_token.txt")
+Sys.setenv("MAPBOX_TOKEN"=my.token)
+
+# Import dam_inc from Dam Data Analysis
+
+dam_inc <- read.csv("/Users/ciara/Documents/Research/Project 2021/Dam Data/ASDSO Dam Incident Database.csv", na.strings=c("N/A","Not Available",""))
+
+# remove entries with 0 and NA for necessary dam parameters
+
+dam_inc <- dam_inc[!is.na(dam_inc$Incident.Date),]             # incident date
+dam_inc <- dam_inc[dam_inc$Latitude !=0,]                      # coordinates
+dam_inc <- dam_inc[dam_inc$Year.Completed != 0,]               # year completed
+dam_inc <- dam_inc[dam_inc$Dam.Height != "0 ft",]              # height
+dam_inc <- dam_inc[dam_inc$Max.Storage..ac.ft.!= "0 ac-ft",]   # reservoir storage
+dam_inc <- dam_inc[dam_inc$Surface.Area..acres.!= "0 acres",]  # reservoir surface area
+
+# remove all unwanted variables
+
+dam_inc <- select(dam_inc, -c(Incident.Mechanism.2, Incident.Mechanism.3, Economic.Damages..in...,
+                                Response, Volume.released.at.failure..ac.ft., Additional.Remarks.or.Updates, 
+                                Incident.Time, Incident.Duration, Incident.Report.Produced, Fatalities..Number., 
+                                Number.of.People.Evacuated, Number.of.Habitable.Structures.Evacuated, 
+                                Number.of.Habitable.Structures.Flooded, Other.Infrastructure.Impacts, Year.Modified))
+
+
+# Import dam_inc_final
+
+dam_inc_new <- rename(dam_inc, NIDID = NID.Number) # make NID variables identical 
+nid <- read.csv("/Users/ciara/Documents/Research/Project 2021/Dam Data/NID2019_U.csv")
+nid1 <- select(nid, c(NIDID, INSPECTION_DATE, INSPECTION_FREQUENCY))
+dam_inc_new <- left_join(dam_inc_new, nid1, by = "NIDID")
+
+# extract dams that are high hazard 
+# Add Incident.Year and Age.At.Incident columns
+
+dam_inc_final <- dam_inc_new %>%
+  filter(Downstream.Hazard.Potential == "H") %>% 
+  mutate(Incident.Year = as.numeric(substr(Incident.Date, 7, 10))) %>% 
+  mutate(Age.At.Incident = Incident.Year - Year.Completed) 
+
+# remove entries that have negative numbers in Age.At.Incident
+
+dam_inc_final <- dam_inc_final %>%
+  slice(-c(73, 141, 142))
+
+# remove duplicates
+
+dam_inc_final <- dam_inc_final[!duplicated(dam_inc_final$Incident.ID),] 
+
+
+```
+### **New York & Hurricane Irene**
+
+#### All Dam Incidents 
+
+On August 28, 2011, a tropical storm that was formerly [Hurricane Irene](https://www.baruch.cuny.edu/nycdata/disasters/hurricanes-irene.html) caused 10 deaths and over $1.3 billion in damages in New York State. The interactive map below shows all of the dams that had incidents because of the storm. When compared to [this map](http://www.nrcc.cornell.edu/services/blog/2011/09/02_irene/index.html) produced by the Northeast Regional Climate Center, the affected dams were located where New York had the heaviest rainfall (towards the east).
+
+```{r}
+
+hydro_event_all <- dam_inc[!is.na(dam_inc$Named.Hydrologic.Event),]
+
+
+hydro_event_all <- hydro_event_all %>% 
+  mutate(Incident.Year = as.numeric(substr(Incident.Date, 7, 10))) %>% 
+  mutate(Age.At.Incident = Incident.Year - Year.Completed)
+
+NY_event_all <- hydro_event_all %>% # focus on NY and Irene
+  filter(State == "NY")
+
+NY_event_all %>% 
+  plot_mapbox(lat = ~Latitude, lon = ~Longitude, mode = 'scattermapbox')  %>% 
+  add_markers(text = ~paste(Dam.Name, "\n", 
+                            "Incident Type:", Incident.Type, "\n", 
+                            "Age:", Age.At.Incident, "\n", 
+                            "Cause:", Incident.Mechanism.1, "\n", 
+                            "Body of Water:", str_to_title(River.Name)),
+            color = ~Downstream.Hazard.Potential, 
+            colors = c("red", "green", "yellow"), 
+            size = 3000, 
+            hoverinfo = "text") %>%
+  layout(
+    mapbox = list(zoom = 4, 
+                  center = list(lat = ~median(Latitude), lon = ~median(Longitude)),
+                  style = 'open-street-map'),
+    legend = list(orientation = 'v',
+              font = list(size = 12), 
+              title= list(text= "<b> Hazard Potential </b>"))) 
+
+```
+
+#### Dam Ages
+
+The interactive map below shows which dams were under or over 50 years old at the time. The majority of the dams were over 50 years old.
+
+```{r}
+
+NY_event_age <- NY_event_all %>% 
+  mutate(Over.50 = case_when(Age.At.Incident <= 50 ~ "No",
+                             Age.At.Incident > 50 ~ "Yes"))
+
+NY_event_age %>% 
+  plot_mapbox(lat = ~Latitude, lon = ~Longitude, mode = 'scattermapbox')  %>% 
+  add_markers(text = ~paste(Dam.Name, "\n", 
+                            "Hazard Potential:", Downstream.Hazard.Potential, "\n",
+                            "Incident Type:", Incident.Type, "\n", 
+                            "Age:", Age.At.Incident, "\n", 
+                            "Cause:", Incident.Mechanism.1, "\n", 
+                            "Body of Water:", str_to_title(River.Name)),
+            color = ~Over.50, 
+            colors = c("green", "red"), 
+            size = 3000, 
+            hoverinfo = "text") %>%
+  layout(
+    mapbox = list(zoom = 4, 
+                  center = list(lat = ~median(Latitude), lon = ~median(Longitude)),
+                  style = 'open-street-map'),
+    legend = list(orientation = 'v',
+              font = list(size = 12), 
+              title= list(text= "<b> Over 50 Years Old </b>"))) 
+
+```
+#### High Hazard Dams
+
+This interactive map shows the high hazard dams that were affected by the storm and if they were under or over 50 years old at the time. Again, the majority of the dams were over 50 years old.
+
+```{r}
+
+NY_hh <- dam_inc_final[!is.na(dam_inc_final$Named.Hydrologic.Event),]
+
+
+NY_hh <- NY_hh %>% 
+  mutate(Over.50 = case_when(Age.At.Incident <= 50 ~ "No",
+                             Age.At.Incident > 50 ~ "Yes")) %>% 
+  filter(State == "NY")
+
+
+NY_hh %>% 
+  plot_mapbox(lat = ~Latitude, lon = ~Longitude, mode = 'scattermapbox')  %>% 
+  add_markers(text = ~paste(Dam.Name, "\n", "Age:", Age.At.Incident, 
+                            "\n", "Cause:", Incident.Mechanism.1, "\n", "Body of Water:", 
+                            str_to_title(River.Name)),
+            color = ~Over.50, colors = c("green", "red"), size = 3000, hoverinfo = "text",) %>%
+  layout(
+    mapbox = list(zoom = 4, 
+                  center = list(lat = ~median(Latitude), lon = ~median(Longitude)),
+                  style = 'open-street-map'),
+    legend = list(orientation = 'v',
+              font = list(size = 12), 
+              title= list(text= "<b> Over 50 Years Old </b>"))) 
+
+
+```
+### **South Carolina & 2015 Storm**
+
+#### All Dam Failures
+
+In the ASDSO dataset, South Carolina had several dams that had incidents on October 14, 2015. This was when SC experienced a 1000-year rainfall event which caused [several](http://npdp.stanford.edu/2015_SC_Flood_Failures) of its dams to fail. All 47 dams were earth dams that failed due to overtopping, were privately owned, and were around or more than 50 years old. Although the interactive map below shows that most of the dams had low hazard potential, there were many high and significant hazard dams closely surrounding the city of Columbia.
+
+```{r}
+
+fail_all <- filter(dam_inc, Incident.Type == "Failure") %>% 
+  mutate(Incident.Year = as.numeric(substr(Incident.Date, 7, 10))) %>% 
+  mutate(Age.At.Incident = Incident.Year - Year.Completed)
+
+SC_fail_all <- filter(fail_all, State == "SC" & Incident.Date == "10/04/2015")
+
+SC_fail_all %>% 
+  plot_mapbox(lat = ~Latitude, lon = ~Longitude, mode = 'scattermapbox')  %>% 
+  add_markers(text = ~paste(Dam.Name, "\n", 
+                            "Age:", Age.At.Incident, "\n", 
+                            "Cause:", Incident.Mechanism.1, "\n", 
+                            "Body of Water:", str_to_title(River.Name)),
+            color = ~Downstream.Hazard.Potential, 
+            colors = c("red", "green", "yellow"), 
+            size = 3000, 
+            hoverinfo = "text") %>%
+  layout(
+    mapbox = list(zoom = 7.5, 
+                  center = list(lat = ~median(Latitude), lon = ~median(Longitude))),
+    legend = list(orientation = 'v',
+              font = list(size = 12), 
+              title= list(text= "<b> Hazard Potential </b>"))) 
+
+```
+
+#### Dam Ages
+
+The interactive map below shows that all but 5 dams were over 50 years old during the time.
+
+```{r}
+SC_fail_all <- SC_fail_all %>% 
+  mutate(Over.50 = case_when(Age.At.Incident <= 50 ~ "No",
+                             Age.At.Incident > 50 ~ "Yes"))
+
+
+SC_fail_all %>% 
+  plot_mapbox(lat = ~Latitude, lon = ~Longitude, mode = 'scattermapbox')  %>% 
+  add_markers(text = ~paste(Dam.Name, "\n", 
+                            "Hazard Potential:", Downstream.Hazard.Potential, "\n",
+                            "Age:", Age.At.Incident, "\n", 
+                            "Cause:", Incident.Mechanism.1, "\n", 
+                            "Body of Water:", str_to_title(River.Name)),
+            color = ~Over.50, 
+            colors = c("green", "red"), 
+            size = 3000, 
+            hoverinfo = "text") %>%
+  layout(
+    mapbox = list(zoom = 7.5, 
+                  center = list(lat = ~median(Latitude), lon = ~median(Longitude))),
+    legend = list(orientation = 'v',
+              font = list(size = 12), 
+              title= list(text= "<b> Over 50 Years Old </b>"))) 
+
+```
+#### High Hazard Dams
+
+This interactive maps provides a closer look at the high hazard dams that failed, which were all over 50 years old (the oldest dams being 115 years old). Also note again that these dams surrounded the city of Columbia, where there's a higher concentration of people.
+
+```{r}
+
+fail_hh <- filter(dam_inc_final, Incident.Type == "Failure") %>% 
+  mutate(Over.50 = case_when(Age.At.Incident <= 50 ~ "No",
+                             Age.At.Incident > 50 ~ "Yes"))
+
+SC_fail_hh <- filter(fail_hh, State == "SC" & Incident.Date == "10/04/2015")
+
+# Rename "no name" dams
+
+SC_fail_hh$Dam.Name[2:5] <- str_to_upper(c("Lake Elizabeth Dam", "Carys Lake Dam", "Rocky Ford Lake Dam", "North Lake Dam"))
+
+SC_fail_hh %>% 
+  plot_mapbox(lat = ~Latitude, lon = ~Longitude, mode = 'scattermapbox')  %>% 
+  add_markers(text = ~paste(Dam.Name, "\n", "Age:", Age.At.Incident, 
+                            "\n", "Cause:", Incident.Mechanism.1, "\n", "Body of Water:", 
+                            str_to_title(River.Name)),
+            color = ~Over.50, colors = c("red"), size = 3000, hoverinfo = "text") %>%
+  layout(
+    mapbox = list(zoom = 9.5, 
+                  center = list(lat = ~median(Latitude), lon = ~median(Longitude))),
+    legend = list(orientation = 'v',
+              font = list(size = 12), 
+              title= list(text= "<b> Over 50 Years Old </b>"))) 
+
+```
